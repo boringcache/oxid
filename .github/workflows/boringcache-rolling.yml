@@ -1,0 +1,83 @@
+name: BoringCache Rolling
+
+on:
+  push:
+    branches: [boringcache-validation]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: boringcache-validation
+  cancel-in-progress: false
+
+jobs:
+  commit:
+    name: ${{ matrix.provider }} ${{ matrix.case }} commit
+    if: github.repository == 'boringcache/oxid' && github.ref == 'refs/heads/boringcache-validation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [GitHub, BoringCache]
+        case: [unit, ui]
+    env:
+      CARGO_INCREMENTAL: '0'
+      CC: cc
+      CXX: c++
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Realize the pinned Nix shell
+        env:
+          OXID_SHELL: ${{ matrix.case == 'unit' && 'ci-rust' || 'ci-ui' }}
+        run: |
+          # shellcheck disable=SC2016
+          nix develop ".#$OXID_SHELL" --command bash -c 'dirname "$(command -v sccache)" >> "$GITHUB_PATH"; sccache --version; rustc -Vv'
+      - name: Configure GitHub compiler cache
+        if: matrix.provider == 'GitHub'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          OXID_CASE: ${{ matrix.case }}
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', 'true');
+            core.exportVariable('SCCACHE_GHA_ENABLED', 'on');
+            core.exportVariable('SCCACHE_GHA_VERSION', `oxid-validation-${process.env.OXID_CASE}-20260909`);
+            core.exportVariable('SCCACHE_GHA_RW_MODE', process.env.OXID_CASE === 'unit' ? 'READ_WRITE' : 'READ_ONLY');
+      - name: Configure BoringCache compiler cache
+        id: boringcache
+        if: matrix.provider == 'BoringCache'
+        uses: boringcache/one@90111526eb218a7f1e119ac2b29f765bd4d82734 # v1.21.0
+        with:
+          mode: sccache
+          trust-policy: ${{ matrix.case == 'unit' && 'publish' || 'restore' }}
+          working-directory: ${{ matrix.case == 'ui' && '.github/boringcache-ui' || '.' }}
+          fail-on-cache-error: true
+      - name: Run the upstream workload
+        env:
+          OXID_CASE: ${{ matrix.case }}
+        run: .github/boringcache-run.sh "$OXID_CASE"
+      - name: Retain workload measurements and native compiler statistics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.provider }}-${{ matrix.case }}-commit-${{ github.run_id }}
+          path: validation-results
+          if-no-files-found: warn
+      - name: Retain BoringCache setup evidence
+        if: always() && matrix.provider == 'BoringCache' && steps.boringcache.outputs.evidence-path != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: BoringCache-${{ matrix.case }}-commit-setup-${{ github.run_id }}
+          path: ${{ steps.boringcache.outputs.evidence-path }}
+          if-no-files-found: warn

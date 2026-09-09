@@ -26,6 +26,9 @@ nix develop ".#$oxid_shell" --command bash -c '
     ./scripts/ci/run-with-sccache-stats.sh ./run.sh "$1" --strict
   oxid_status=$?
   sccache --show-stats --stats-format=json > validation-results/sccache.json
+  if [[ "${SCCACHE_GHA_ENABLED:-}" == on ]]; then
+    sccache --stop-server
+  fi
   du -sk target "${SCCACHE_DIR:-$HOME/.cache/oxid-sccache}" 2>/dev/null > validation-results/local-storage-kib.txt
   exit "$oxid_status"
 ' bash "$1" 2>&1 | tee validation-results/workload.log

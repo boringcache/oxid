@@ -2,6 +2,17 @@ name: BoringCache Fresh
 
 on:
   workflow_dispatch:
+    inputs:
+      repair_github:
+        description: Seed repaired GitHub storage and reuse the existing BoringCache seed
+        type: boolean
+        required: false
+        default: false
+      cli_version:
+        description: Optional released CLI override; empty uses the Action default
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -21,8 +32,9 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
-        provider: [GitHub, BoringCache]
+        provider: ${{ inputs.repair_github && fromJSON('["GitHub"]') || fromJSON('["GitHub", "BoringCache"]') }}
         case: [unit, ui]
     env:
       CARGO_INCREMENTAL: '0'
@@ -49,14 +61,17 @@ jobs:
           script: |
             core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', 'true');
             core.exportVariable('SCCACHE_GHA_ENABLED', 'on');
             core.exportVariable('SCCACHE_GHA_VERSION', `oxid-validation-${process.env.OXID_CASE}-20260909`);
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_WRITE');
       - name: Configure BoringCache compiler cache
+        id: boringcache
         if: matrix.provider == 'BoringCache'
         uses: boringcache/one@90111526eb218a7f1e119ac2b29f765bd4d82734 # v1.21.0
         with:
           mode: sccache
+          cli-version: ${{ inputs.cli_version }}
           trust-policy: publish
           working-directory: ${{ matrix.case == 'ui' && '.github/boringcache-ui' || '.' }}
           fail-on-cache-error: true
@@ -70,6 +85,13 @@ jobs:
         with:
           name: ${{ matrix.provider }}-${{ matrix.case }}-cold-${{ github.run_id }}
           path: validation-results
+          if-no-files-found: warn
+      - name: Retain BoringCache setup evidence
+        if: always() && matrix.provider == 'BoringCache' && steps.boringcache.outputs.evidence-path != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: BoringCache-${{ matrix.case }}-cold-setup-${{ github.run_id }}
+          path: ${{ steps.boringcache.outputs.evidence-path }}
           if-no-files-found: warn
 
   warm:
@@ -111,14 +133,17 @@ jobs:
           script: |
             core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', 'true');
             core.exportVariable('SCCACHE_GHA_ENABLED', 'on');
             core.exportVariable('SCCACHE_GHA_VERSION', `oxid-validation-${process.env.OXID_CASE}-20260909`);
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
       - name: Configure BoringCache compiler cache
+        id: boringcache
         if: matrix.provider == 'BoringCache'
         uses: boringcache/one@90111526eb218a7f1e119ac2b29f765bd4d82734 # v1.21.0
         with:
           mode: sccache
+          cli-version: ${{ inputs.cli_version }}
           trust-policy: restore
           working-directory: ${{ matrix.case == 'ui' && '.github/boringcache-ui' || '.' }}
           fail-on-cache-error: true
@@ -132,5 +157,12 @@ jobs:
         with:
           name: ${{ matrix.provider }}-${{ matrix.case }}-warm-${{ github.run_id }}
           path: validation-results
+          if-no-files-found: warn
+      - name: Retain BoringCache setup evidence
+        if: always() && matrix.provider == 'BoringCache' && steps.boringcache.outputs.evidence-path != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: BoringCache-${{ matrix.case }}-warm-setup-${{ github.run_id }}
+          path: ${{ steps.boringcache.outputs.evidence-path }}
           if-no-files-found: warn
 

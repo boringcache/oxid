@@ -1,0 +1,7 @@
+workspace = "boringcache/oxid"
+
+[adapters.sccache]
+tag = "unit-20260909"
+no-git = true
+worktree-reuse = "off"
+fail-on-cache-error = true
